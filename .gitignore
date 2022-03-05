@@ -1,3 +1,8 @@
+# Training/test data
+X_train.csv
+X_test.csv
+Y_train.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
