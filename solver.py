@@ -10,10 +10,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from utils import feats_norm
+from utils import layer_norm
 
 def sgd(w0, X, Y, var, batch_size, epochs):
-    diffs_norm = feats_norm(X - Y, square=True)
+    diffs_norm = layer_norm(X - Y, square=True)
 
     if var is None:
         var = torch.quantile(diffs_norm, 0.1, interpolation='midpoint').item()
@@ -52,8 +52,8 @@ class SemiLGK(nn.Module):
 
     def forward(self, X):
         diffs = X.unsqueeze(1) - self.w0
-        diffs_norm = torch.einsum('pohwi,ohwi->po', diffs, diffs)
-        return torch.exp(-diffs / self.var)
+        diffs_norm = layer_norm(diffs, squared=True)
+        return torch.exp(-diffs_norm / self.var)
 
 
 class LinearGaussianKernel(nn.Module):

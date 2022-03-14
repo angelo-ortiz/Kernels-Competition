@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import feats_norm, extract_sq_patches, gaussian_window
+from utils import layer_norm, extract_sq_patches, gaussian_window
 from kmeans import k_means
 from solver import sgd# , l_bfgs_b
 
@@ -82,45 +82,57 @@ class CKNLayer:
             )
 
     def forward(self, input_maps):
-        n = input_maps.shape[0]
-        if input_maps.shape[-1] <= 2:  # low dimension
-            # TODO
-            pass
+        device = input_maps.device
+
+        assert input_maps.dim == 4, '`input_maps` must have shape (batch, h, w, c)'
+        n, _, _, c = input_maps.shape
+        assert c >= 2, 'The number of channels must be at least 2'
+
+        if c == 2:  # low dimension
+            angles = torch.linspace(
+                0., 2 * np.pi, self.patch_size + 1, device=device
+            )
+            w = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
+            self.w = w.view(self.patch_size, 1, 1, 2)
+            self.eta = torch.ones(self.patch_size, device=device)
+            self.var = np.square(2 * np.pi / self.patch_size)
+            patches = input_maps.view(-1, 1, 1, 2)
         else:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
-            norms = feats_norm(patches)
-            patches_norm = patches \
-                / torch.maximum(MIN_NORM, norms).view(-1, 1, 1, 1)
 
-            diffs = patches_norm.unsqueeze(1) - self.w
-            diffs_norm = torch.einsum('pohwi,ohwi->po', diffs, diffs)
+        norms = layer_norm(patches)
+        patches_norm = patches \
+            / torch.maximum(MIN_NORM, norms).view(-1, 1, 1, 1)
 
-            act_maps = torch.exp(-diffs_norm / var) * torch.sqrt(self.eta)
-            act_maps *= norms.unsqueeze(1) # batch * h * w, p_k
+        diffs = patches_norm.unsqueeze(1) - self.w
+        diffs_norm = layer_norm(diffs, squared=True)
 
-            gauss_window = gaussian_window( # h', w'
-                n=self.subsample_factor,
-                var=self.subsample_factor**2,
-                device=input_maps.device
-            )
+        act_maps = torch.exp(-diffs_norm / self.var) * torch.sqrt(self.eta)
+        act_maps *= norms.unsqueeze(1) # batch * h * w, p_k
 
-            patch_dim = np.sqrt(act_maps.shape[0]/n)
-            assert patch_dim == int(patch_dim)
-            patch_dim = int(patch_dim)
+        patch_dim = np.sqrt(act_maps.shape[0] / n)
+        assert patch_dim == int(patch_dim), 'Only square patches supported'
+        patch_dim = int(patch_dim)
 
-            act_maps = act_maps.view(n, patch_dim, patch_dim, self.out_filters)
-            act_maps = act_maps.permute(0, 3, 1, 2).contiguous()
-            act_maps = act_maps.view(-1, 1, patch_dim, patch_dim)
+        act_maps = act_maps.view(n, patch_dim, patch_dim, self.out_filters)
+        act_maps = act_maps.permute(0, 3, 1, 2).contiguous()
+        act_maps = act_maps.view(-1, 1, patch_dim, patch_dim)
 
-            output_maps = F.conv2d(
-                act_maps,  # batch * p_k, 1, h, w
-                gauss_window.view(1, 1, *gaussian_window.shape),  # 1, 1, h', w'
-                stride=self.subsample_factor
-            )
-            output_maps = out_maps.view(
-                n,
-                self.out_filters,
-                *output_maps.shape[2:]
-            ).permute(0, 2, 3, 1).contiguous()
+        gauss_window = gaussian_window( # h', w'
+            n=self.subsample_factor,
+            var=self.subsample_factor**2,
+            device=device
+        )
 
-            return output_maps * np.sqrt(2./np.pi) # batch, p_k, h", w"
+        output_maps = F.conv2d(
+            act_maps,  # batch * p_k, 1, h, w
+            gauss_window.view(1, 1, *gaussian_window.shape),  # 1, 1, h', w'
+            stride=self.subsample_factor
+        )
+        output_maps = out_maps.view(
+            n,
+            self.out_filters,
+            *output_maps.shape[2:]
+        ).permute(0, 2, 3, 1).contiguous()
+
+        return output_maps # batch, p_k, h", w"

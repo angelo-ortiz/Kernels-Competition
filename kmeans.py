@@ -7,7 +7,7 @@
 import numpy as np
 import torch
 
-from utils import feats_norm, euclidean_distances
+from utils import layer_norm, euclidean_distances
 
 def _init_centroids(X, n_clusters, x_sq_norms):
     n_samples, h, w, c = X.shape
@@ -92,7 +92,7 @@ def _k_means_iter(X, x_sq_norms, centres, update_centres=True):
     for c in range(n_clusters):
         centres_new[c] = torch.mean(X_part[c], dim=0)
 
-    centre_shift = feats_norm(centres_new - centres, squared=False)
+    centre_shift = layer_norm(centres_new - centres, squared=False)
 
     return centres_new, weight_in_clusters, labels, centre_shift
 
@@ -134,7 +134,7 @@ def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
         )
 
     # Sum of squared distance between each sample and its assigned center
-    inertia = feats_norm(X - centres[labels], squared=True)
+    inertia = layer_norm(X - centres[labels], squared=True)
 
     return labels, inertia, centres, i + 1
 
@@ -160,7 +160,7 @@ def k_means(X, n_clusters, n_init=10, max_iter=300, tol=1e-4):
         in the cluster centers of two consecutive iterations to declare
         convergence.
     """
-    x_squared_norms = feats_norms(X, squared=True)
+    x_squared_norms = layer_norms(X, squared=True)
     best_inertia, best_labels = None, None
 
     # subtract of mean of x for more accurate distance computations

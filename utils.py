@@ -6,23 +6,22 @@
 
 import torch
 
-def feats_norm(X, squared=False):
-    norms = torch.einsum('bhwc,bhwc->b', X, X)
+def layer_norm(X, squared=False):
+    norms = torch.einsum('...hwc,...hwc->...', X, X)
 
     if not squared:
-        torch.sqrt(norms, out=norms)
-        # norms = torch.sqrt(norms)
+        norms = torch.sqrt(norms)
     return norms
 
 
 def euclidean_distances(X, Y, X_norm_squared=None, Y_norm_squared=None,
                         squared=False):
     if X_norm_squared is None:
-        X_norm_squared = feats_norm(X, squared=True)
+        X_norm_squared = layer_norm(X, squared=True)
     XX = X_norm_squared.unsqueeze(1)
 
     if Y_norm_squared is None:
-        Y_norm_squared = feats_norm(Y, squared=True)
+        Y_norm_squared = layer_norm(Y, squared=True)
     YY = Y_norm_squared.unsqueeze(0)
 
     distances = -2. * torch.einsum('xhwc,yhwc->xy', X, Y)
@@ -37,9 +36,9 @@ def euclidean_distances(X, Y, X_norm_squared=None, Y_norm_squared=None,
 
 
 def dynamic_partition(data, partitions, num_partitions=None):
-    assert len(partitions.shape) == 1, "Only 1D partitions supported"
+    assert len(partitions.shape) == 1, 'Only 1D partitions supported'
     assert data.shape[0] == partitions.shape[0], \
-    "Partitions requires the same size as data"
+        'Partitions requires the same size as data'
 
     if num_partitions is None:
         num_partitions = max(torch.unique(partitions))
