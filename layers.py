@@ -8,44 +8,52 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import feats_norm
+from utils import feats_norm, extract_sq_patches, gaussian_window
 from kmeans import k_means
-# from solver import l_bfgs_b, sgd
+from solver import sgd# , l_bfgs_b
 
 MIN_NORM = 1e-3
 
-def extract_sq_patches(x, size, stride):
-    """x : (batch, h, w, c) """
-    patches = x.unfold(1, size, stride).unfold(2, size, stride)
-    return patches.contiguous().view(-1, size, size, x.shape[-1])
-
-def gaussian_window(n, var, device):
-    if n <= 1:
-        return torch.ones(1, 1, device=device)
-    w = torch.arange(n, device=device) - (n - 1.) / 2.
-    ww = torch.stack([w, w.t()], dim=-1)
-    ww = torch.einsum('ijk,ijk->ij', ww, ww)  # square of the norm
-    return torch.exp(-w / var)
-
-
-class CKN(nn.Module):
-    def __init__(self):
+class CKN:
+    def __init__(self, out_filters, patch_sizes, subsample_factors,
+                 solver_samples, var=None, batch_size=50, epochs=4000):
         super().__init__()
+        self.layers = []
+        for i in range(len(out_filters)):
+            self.layers.append(CKNLayer(
+                out_filters[i],
+                patch_sizes[i],
+                subsample_factors[i],
+                solver_samples,
+                var,
+                batch_size,
+                epochs
+            ))
 
-    def forward(self):
-        pass
+    def train(self, input_maps):
+        output_maps = input_maps
+        for lay in self.layers:
+            lay.train(output_maps)
+            output_maps = lay.forward(output_maps)
 
-    def backward(self):
-        pass
+    def forward(self, input_maps):
+        output_maps = input_maps
+        for lay in self.layers:
+            output_maps = lay.forward(output_maps)
+        return output_maps
+
 
 class CKNLayer:
     def __init__(self, out_filters, patch_size, subsample_factor,
-                 solver_samples, var=None):
+                 solver_samples, var=None, batch_size=50, epochs=4000):
+        super().__init__()
         self.out_filters = out_filters  # p_k
         self.patch_size = patch_size  # sqrt(|P'_k|)
         self.subsample_factor = subample_factor
         self.solver_samples = solver_samples
         self.var = var
+        self.batch_size = batch_size
+        self.epochs = epochs
 
     def train(self, input_maps):
         """TODO
@@ -57,9 +65,6 @@ class CKNLayer:
         """
         if input_maps.shape[-1] > 2:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
-            # patches = patches.view(
-            #     -1, np.prod(patches.shape[1:])
-            # )
 
             indices = torch.randperm(patches.shape[0])
             sampled_indices = torch.randint(len(indices),
@@ -67,13 +72,19 @@ class CKNLayer:
 
             X, Y = patches[indices[sampled_indices]]
             w0, _, _ = k_means(torch.cat((X, Y), dim=0), self.out_filters)
-            self.w, self.eta, self.var = sgd(w0, X, Y, self.var)
-        # if self.sigma is None:
-        #     self.sigma = q_01(...)
+            self.w, self.eta, self.var = sgd(
+                w0,
+                X,
+                Y,
+                self.var,
+                self.batch_size,
+                self.epochs
+            )
 
     def forward(self, input_maps):
         n = input_maps.shape[0]
         if input_maps.shape[-1] <= 2:  # low dimension
+            # TODO
             pass
         else:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
@@ -84,7 +95,7 @@ class CKNLayer:
             diffs = patches_norm.unsqueeze(1) - self.w
             diffs_norm = torch.einsum('pohwi,ohwi->po', diffs, diffs)
 
-            act_maps = torch.exp(-diffs_norm/var) * torch.sqrt(self.eta)
+            act_maps = torch.exp(-diffs_norm / var) * torch.sqrt(self.eta)
             act_maps *= norms.unsqueeze(1) # batch * h * w, p_k
 
             gauss_window = gaussian_window( # h', w'
