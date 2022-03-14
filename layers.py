@@ -31,9 +31,11 @@ class CKN:
             ))
 
     def train(self, input_maps):
+        print('Starting training...')
         output_maps = input_maps
-        for lay in self.layers:
+        for i, lay in enumerate(self.layers):
             lay.train(output_maps)
+            print(f'Finished layer {i+1}!')
             output_maps = lay.forward(output_maps)
 
     def forward(self, input_maps):
@@ -45,11 +47,11 @@ class CKN:
 
 class CKNLayer:
     def __init__(self, out_filters, patch_size, subsample_factor,
-                 solver_samples, var=None, batch_size=50, epochs=4000):
+                 solver_samples=300000, var=None, batch_size=50, epochs=4000):
         super().__init__()
         self.out_filters = out_filters  # p_k
         self.patch_size = patch_size  # sqrt(|P'_k|)
-        self.subsample_factor = subample_factor
+        self.subsample_factor = subsample_factor
         self.solver_samples = solver_samples
         self.var = var
         self.batch_size = batch_size
@@ -67,12 +69,15 @@ class CKNLayer:
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
 
             indices = torch.randperm(patches.shape[0])
-            sampled_indices = torch.randint(len(indices),
-                                            (2, self.solver_samples))
-
+            solver_samples = min(len(patches), self.solver_samples)
+            sampled_indices = torch.randint(len(indices), (2, solver_samples))
             X, Y = patches[indices[sampled_indices]]
+
+            print('Starting k-means initialisation...', end='', flush=True)
             w0, _, _ = k_means(torch.cat((X, Y), dim=0), self.out_filters)
-            self.w, self.eta, self.var = sgd(
+            print('done!')
+            print('Starting SGD solver...', end='', flush=True)
+            eta, w, self.var = sgd(
                 w0,
                 X,
                 Y,
@@ -80,29 +85,32 @@ class CKNLayer:
                 self.batch_size,
                 self.epochs
             )
+            print('done!')
+            self.eta = eta.detach()
+            self.w = w.detach()
 
     def forward(self, input_maps):
         device = input_maps.device
 
-        assert input_maps.dim == 4, '`input_maps` must have shape (batch, h, w, c)'
+        assert input_maps.dim() == 4, '`input_maps` must have shape (batch, h, w, c)'
         n, _, _, c = input_maps.shape
         assert c >= 2, 'The number of channels must be at least 2'
 
         if c == 2:  # low dimension
             angles = torch.linspace(
-                0., 2 * np.pi, self.patch_size + 1, device=device
-            )
+                0., 2 * np.pi, self.out_filters + 1, device=device
+            )[:-1]
             w = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
-            self.w = w.view(self.patch_size, 1, 1, 2)
-            self.eta = torch.ones(self.patch_size, device=device)
-            self.var = np.square(2 * np.pi / self.patch_size)
+            self.w = w.view(self.out_filters, 1, 1, 2)
+            self.eta = torch.ones(self.out_filters, device=device)
+            self.var = np.square(2 * np.pi / self.out_filters)
             patches = input_maps.view(-1, 1, 1, 2)
         else:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
 
         norms = layer_norm(patches)
         patches_norm = patches \
-            / torch.maximum(MIN_NORM, norms).view(-1, 1, 1, 1)
+            / torch.clip(norms, min=MIN_NORM).view(-1, 1, 1, 1)
 
         diffs = patches_norm.unsqueeze(1) - self.w
         diffs_norm = layer_norm(diffs, squared=True)
@@ -126,10 +134,10 @@ class CKNLayer:
 
         output_maps = F.conv2d(
             act_maps,  # batch * p_k, 1, h, w
-            gauss_window.view(1, 1, *gaussian_window.shape),  # 1, 1, h', w'
+            gauss_window.view(1, 1, *gauss_window.shape),  # 1, 1, h', w'
             stride=self.subsample_factor
         )
-        output_maps = out_maps.view(
+        output_maps = output_maps.view(
             n,
             self.out_filters,
             *output_maps.shape[2:]

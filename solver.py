@@ -12,14 +12,30 @@ from torch.utils.data import DataLoader
 
 from utils import layer_norm
 
+def _dataloader(X, Y, K, batch_size):
+    n = len(X)
+    n_batches = int(np.ceil(n / batch_size))
+    for i in range(n_batches):
+        b = i * batch_size
+        e = min(b + batch_size, n)
+        yield X[b:e], Y[b:e], K[b:e]
+
+
 def sgd(w0, X, Y, var, batch_size, epochs):
-    diffs_norm = layer_norm(X - Y, square=True)
+    diffs_norm = layer_norm(X - Y, squared=True)
 
     if var is None:
-        var = torch.quantile(diffs_norm, 0.1, interpolation='midpoint').item()
+        var = torch.quantile(
+            diffs_norm,
+            q=0.1,
+            dim=0,
+            keepdim=False,
+            interpolation='midpoint'
+        ).item()
 
     gauss = torch.exp(-diffs_norm / (2. * var ))
-    dataloader = Dataloader(zip(X, Y, gauss), batch_size=batch_size, shuffle=False)
+    n = len(X)
+
     f_history = torch.zeros(epochs)
 
     LGK = LinearGaussianKernel(w0, var).to(X.device)
@@ -28,7 +44,7 @@ def sgd(w0, X, Y, var, batch_size, epochs):
     for i in range(epochs):
         running_f = 0.
 
-        for x, y, k in dataloader:
+        for x, y, k in _dataloader(X, Y, gauss, batch_size):
             k_approx = LGK(x, y)
             f = torch.square(k - k_approx).mean()
             running_f += f.item()
@@ -37,9 +53,11 @@ def sgd(w0, X, Y, var, batch_size, epochs):
             f.backward()
             optimiser.step()
 
+            # TODO: clip eta!
+
         f_history[i] = running_f
 
-    print(f_history.view(-1, 10))
+    # print(f_history.view(-1, 10))
 
     return *LGK.parameters(), var
 

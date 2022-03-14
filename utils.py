@@ -27,7 +27,7 @@ def euclidean_distances(X, Y, X_norm_squared=None, Y_norm_squared=None,
     distances = -2. * torch.einsum('xhwc,yhwc->xy', X, Y)
     distances += XX
     distances += YY
-    torch.maximum(distances, 0, out=distances)
+    torch.clip(distances, min=0., out=distances)
 
     if not squared:
         torch.sqrt(distances, out=distances)
@@ -56,6 +56,6 @@ def gaussian_window(n, var, device):
     if n <= 1:
         return torch.ones(1, 1, device=device)
     w = torch.arange(n, device=device) - (n - 1.) / 2.
-    ww = torch.stack([w, w.t()], dim=-1)
+    ww = torch.stack(torch.meshgrid(w, w, indexing='ij'), dim=-1)
     ww = torch.einsum('ijk,ijk->ij', ww, ww)  # square of the norm
-    return torch.exp(-w / var)
+    return torch.exp(-ww / var)

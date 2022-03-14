@@ -7,7 +7,7 @@
 import numpy as np
 import torch
 
-from utils import layer_norm, euclidean_distances
+from utils import layer_norm, euclidean_distances, dynamic_partition
 
 def _init_centroids(X, n_clusters, x_sq_norms):
     n_samples, h, w, c = X.shape
@@ -20,7 +20,7 @@ def _init_centroids(X, n_clusters, x_sq_norms):
     # Pick first center randomly and track index of point
     centre_id = np.random.randint(n_samples)
     # indices = torch.full(
-    #     size=n_clusters, fill_value=-1, dtype=torch.int32, device=X.device
+    #     size=(n_clusters,), fill_value=-1, dtype=torch.int32, device=X.device
     # )
     centres[0] = X[centre_id]
     # indices[0] = centre_id
@@ -36,9 +36,12 @@ def _init_centroids(X, n_clusters, x_sq_norms):
         # Choose centre candidates by sampling with probability proportional
         # to the squared distance to the closest existing centre
         rand_vals = torch.rand(n_local_trials, device=X.device) * current_pot
-        candidate_ids = torch.searchsorted(torch.cumsum(closest_dist_sq), rand_vals)
+        candidate_ids = torch.searchsorted(
+            torch.cumsum(closest_dist_sq.ravel(), dim=0),
+            rand_vals
+        )
         # XXX: numerical imprecision can result in a candidate_id out of range
-        torch.clip(candidate_ids, None, closest_dist_sq.numel - 1, out=candidate_ids)
+        torch.clip(candidate_ids, max=closest_dist_sq.numel()-1, out=candidate_ids)
 
         # Compute distances to center candidates
         distance_to_candidates = euclidean_distances(
@@ -59,12 +62,12 @@ def _init_centroids(X, n_clusters, x_sq_norms):
         centres[c] = X[best_candidate]
         # indices[c] = best_candidate
 
-    return centers# , indices
+    return centres# , indices
 
 
 def _is_same_clustering(labels1, labels2, n_clusters):
     mapping = torch.full(
-        size=n_clusters, fill_value=-1, dtype=torch.int32, device=labels1.device
+        size=(n_clusters,), fill_value=-1, dtype=torch.int32, device=labels1.device
     )
 
     for i in range(len(labels1)):
@@ -74,11 +77,12 @@ def _is_same_clustering(labels1, labels2, n_clusters):
             return False
     return True
 
+
 def _k_means_iter(X, x_sq_norms, centres, update_centres=True):
     n_clusters = len(centres)
     centres_new = torch.zeros_like(centres)
     labels = torch.full(
-        size=len(X), fill_value=-1, dtype=torch.int32, device=X.device
+        size=(len(X),), fill_value=-1, dtype=torch.int32, device=X.device
     )
     centre_shift = torch.zeros(
         n_clusters, dtype=X.dtype, device=X.device
@@ -94,12 +98,12 @@ def _k_means_iter(X, x_sq_norms, centres, update_centres=True):
 
     centre_shift = layer_norm(centres_new - centres, squared=False)
 
-    return centres_new, weight_in_clusters, labels, centre_shift
+    return centres_new, labels, centre_shift
 
 
 def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
     labels_old = torch.full(
-        size=len(X), fill_value=-1, dtype=torch.int32, device=X.device
+        size=(len(X),), fill_value=-1, dtype=torch.int32, device=X.device
     )
     strict_convergence = False
 
@@ -110,7 +114,7 @@ def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
             centres
         )
 
-        centres, centres_new = centres_new, centres
+        centres = centres_new
 
         if torch.equal(labels, labels_old):
             # First check the labels for strict convergence.
@@ -119,7 +123,7 @@ def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
         else:
             # No strict convergence, check for tol-based convergence.
             centre_shift_tot = torch.square(centre_shift).sum()
-            if center_shift_tot <= tol:
+            if centre_shift_tot <= tol:
                 break
 
         labels_old[:] = labels
@@ -134,7 +138,7 @@ def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
         )
 
     # Sum of squared distance between each sample and its assigned center
-    inertia = layer_norm(X - centres[labels], squared=True)
+    inertia = layer_norm(X - centres[labels], squared=True).sum().item()
 
     return labels, inertia, centres, i + 1
 
@@ -160,7 +164,7 @@ def k_means(X, n_clusters, n_init=10, max_iter=300, tol=1e-4):
         in the cluster centers of two consecutive iterations to declare
         convergence.
     """
-    x_squared_norms = layer_norms(X, squared=True)
+    x_sq_norms = layer_norm(X, squared=True)
     best_inertia, best_labels = None, None
 
     # subtract of mean of x for more accurate distance computations
@@ -191,6 +195,6 @@ def k_means(X, n_clusters, n_init=10, max_iter=300, tol=1e-4):
     distinct_clusters = len(set(best_labels))
     if distinct_clusters < n_clusters:
         print(f'Warning: Number of distinct clusters ({distinct_clusters})',
-              f'found less than n_clusters ({self.n_clusters})!')
+              f'found less than n_clusters ({self.n_clusters})!', sep=' ')
 
     return best_centres, best_labels, best_n_iter
