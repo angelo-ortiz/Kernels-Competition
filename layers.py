@@ -8,7 +8,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import batch_norm, KMmeans
+from utils import feats_norm
+from kmeans import k_means
 # from solver import l_bfgs_b, sgd
 
 MIN_NORM = 1e-3
@@ -65,7 +66,7 @@ class CKNLayer:
                                             (2, self.solver_samples))
 
             X, Y = patches[indices[sampled_indices]]
-            w0 = k_means(torch.cat((X, Y), dim=0), self.out_filters)
+            w0, _, _ = k_means(torch.cat((X, Y), dim=0), self.out_filters)
             self.w, self.eta, self.var = sgd(w0, X, Y, self.var)
         # if self.sigma is None:
         #     self.sigma = q_01(...)
@@ -76,7 +77,7 @@ class CKNLayer:
             pass
         else:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
-            norms = batch_norm(patches)
+            norms = feats_norm(patches)
             patches_norm = patches \
                 / torch.maximum(MIN_NORM, norms).view(-1, 1, 1, 1)
 

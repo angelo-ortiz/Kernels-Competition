@@ -7,7 +7,7 @@
 import numpy as np
 import torch
 
-from utils import batch_norm, euclidean_distances
+from utils import feats_norm, euclidean_distances
 
 def _init_centroids(X, n_clusters, x_sq_norms):
     n_samples, h, w, c = X.shape
@@ -74,32 +74,37 @@ def _is_same_clustering(labels1, labels2, n_clusters):
             return False
     return True
 
-def _inertia(X, centres, labels):
-    # TODO
-    return inertia
-
 def _k_means_iter(X, x_sq_norms, centres, update_centres=True):
     n_clusters = len(centres)
     centres_new = torch.zeros_like(centres)
     labels = torch.full(
         size=len(X), fill_value=-1, dtype=torch.int32, device=X.device
     )
-    weight_in_clusters = torch.zeros(
+    centre_shift = torch.zeros(
         n_clusters, dtype=X.dtype, device=X.device
     )
-    centre_shift = torch.zeros_like(weight_in_clusters)
-    # TODO
+
+    dist_sq = euclidean_distances(
+        X, centres, X_norm_squared=x_sq_norms, squared=True
+    )
+    labels = torch.argmin(dist_sq, dim=1)
+    X_part = dynamic_partition(X, labels, num_partitions=n_clusters)
+    for c in range(n_clusters):
+        centres_new[c] = torch.mean(X_part[c], dim=0)
+
+    centre_shift = feats_norm(centres_new - centres, squared=False)
 
     return centres_new, weight_in_clusters, labels, centre_shift
 
 
 def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
-    labels_old = None
-    # labels.clone()
+    labels_old = torch.full(
+        size=len(X), fill_value=-1, dtype=torch.int32, device=X.device
+    )
     strict_convergence = False
 
     for i in range(max_iter):
-        centres_new, weight_in_clusters, labels, centre_shift = _k_means_iter(
+        centres_new, labels, centre_shift = _k_means_iter(
             X,
             x_sq_norms,
             centres
@@ -107,7 +112,7 @@ def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
 
         centres, centres_new = centres_new, centres
 
-        if labels_old is not None and torch.equal(labels, labels_old):
+        if torch.equal(labels, labels_old):
             # First check the labels for strict convergence.
             strict_convergence = True
             break
@@ -117,21 +122,19 @@ def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
             if center_shift_tot <= tol:
                 break
 
-        if labels_old is None:
-            labels_old = labels.clone()
-        else:
-            labels_old[:] = labels
+        labels_old[:] = labels
 
     if not strict_convergence:
         # rerun E-step so that predicted labels match cluster centers
-        _, _, labels, _ = _k_means_iter(
+        _, labels, _ = _k_means_iter(
             X,
             x_sq_norms,
             centres,
             update_centres=False
         )
 
-    inertia = _inertia(X, centres, labels)
+    # Sum of squared distance between each sample and its assigned center
+    inertia = feats_norm(X - centres[labels], squared=True)
 
     return labels, inertia, centres, i + 1
 
@@ -157,7 +160,7 @@ def k_means(X, n_clusters, n_init=10, max_iter=300, tol=1e-4):
         in the cluster centers of two consecutive iterations to declare
         convergence.
     """
-    x_squared_norms = batch_norms(X, squared=True)
+    x_squared_norms = feats_norms(X, squared=True)
     best_inertia, best_labels = None, None
 
     # subtract of mean of x for more accurate distance computations
