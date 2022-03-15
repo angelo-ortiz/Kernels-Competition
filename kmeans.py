@@ -82,7 +82,7 @@ def _k_means_iter(X, x_sq_norms, centres, update_centres=True):
     n_clusters = len(centres)
     centres_new = torch.zeros_like(centres)
     labels = torch.full(
-        size=(len(X),), fill_value=-1, dtype=torch.int32, device=X.device
+        size=(len(X),), fill_value=-1, dtype=torch.int64, device=X.device
     )
     centre_shift = torch.zeros(
         n_clusters, dtype=X.dtype, device=X.device
@@ -103,7 +103,7 @@ def _k_means_iter(X, x_sq_norms, centres, update_centres=True):
 
 def _k_means_single(X, x_sq_norms, centres, max_iter=300, tol=1e-4):
     labels_old = torch.full(
-        size=(len(X),), fill_value=-1, dtype=torch.int32, device=X.device
+        size=(len(X),), fill_value=-1, dtype=torch.int64, device=X.device
     )
     strict_convergence = False
 

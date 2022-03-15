@@ -31,9 +31,10 @@ class CKN:
             ))
 
     def train(self, input_maps):
-        print('Starting training...')
+        print('Training\n--------')
         output_maps = input_maps
         for i, lay in enumerate(self.layers):
+            print(f'Layer {i+1}:')
             lay.train(output_maps)
             print(f'Finished layer {i+1}!')
             output_maps = lay.forward(output_maps)

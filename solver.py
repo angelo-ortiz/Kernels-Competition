@@ -41,6 +41,9 @@ def sgd(w0, X, Y, var, batch_size, epochs):
     LGK = LinearGaussianKernel(w0, var).to(X.device)
     optimiser = optim.Adam(LGK.parameters(), lr=1e-2)
 
+    verbose_interval = epochs // 10
+    print()
+
     for i in range(epochs):
         running_f = 0.
 
@@ -56,6 +59,11 @@ def sgd(w0, X, Y, var, batch_size, epochs):
             # TODO: clip eta!
 
         f_history[i] = running_f
+
+        if i % verbose_interval == verbose_interval-1:
+            print(f'\rSGD epoch {i+1}/{epochs}', end='', flush=True)
+
+    print('\033[1K\033[F\033[22C', end='', flush=True)
 
     # print(f_history.view(-1, 10))
 
