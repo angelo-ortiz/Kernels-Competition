@@ -5,9 +5,11 @@
 """
 
 import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from utils import layer_norm, extract_sq_patches, gaussian_window
 from kmeans import k_means
 from solver import sgd# , l_bfgs_b
@@ -37,12 +39,15 @@ class CKN:
             print(f'Layer {i+1}:')
             lay.train(output_maps)
             print(f'Finished layer {i+1}!')
-            output_maps = lay.forward(output_maps)
+
+            with torch.no_grad():
+                output_maps = lay.forward(output_maps)
 
     def forward(self, input_maps):
         output_maps = input_maps
-        for lay in self.layers:
-            output_maps = lay.forward(output_maps)
+        with torch.no_grad():
+            for lay in self.layers:
+                output_maps = lay.forward(output_maps)
         return output_maps
 
 
@@ -67,18 +72,20 @@ class CKNLayer:
             The input maps `xi_{k-1}`.
         """
         if input_maps.shape[-1] > 2:  # high dimension
-            patches = extract_sq_patches(input_maps, self.patch_size, 1)
+            with torch.no_grad():
+                patches = extract_sq_patches(input_maps, self.patch_size, 1)
 
-            indices = torch.randperm(patches.shape[0])
-            solver_samples = min(len(patches), self.solver_samples)
-            sampled_indices = torch.randint(len(indices), (2, solver_samples))
-            X, Y = patches[indices[sampled_indices]]
+                indices = torch.randperm(patches.shape[0])
+                solver_samples = min(len(patches), self.solver_samples)
+                sampled_indices = torch.randint(len(indices), (2, solver_samples))
+                X, Y = patches[indices[sampled_indices]]
 
-            print('Starting k-means initialisation...', end='', flush=True)
-            w0, _, _ = k_means(torch.cat((X, Y), dim=0), self.out_filters)
-            print('done!')
+                print('Starting k-means initialisation...', end='', flush=True)
+                w0, _, _ = k_means(torch.cat((X, Y), dim=0), self.out_filters)
+                print('done!')
+
             print('Starting SGD solver...', end='', flush=True)
-            eta, w, self.var = sgd(
+            log_eta, w, self.var = sgd(
                 w0,
                 X,
                 Y,
@@ -87,7 +94,7 @@ class CKNLayer:
                 self.epochs
             )
             print('done!')
-            self.eta = eta.detach()
+            self.eta = torch.exp(log_eta.detach())
             self.w = w.detach()
 
     def forward(self, input_maps):

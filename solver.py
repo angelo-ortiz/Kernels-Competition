@@ -5,6 +5,7 @@
 """
 
 import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -41,7 +42,7 @@ def sgd(w0, X, Y, var, batch_size, epochs):
     LGK = LinearGaussianKernel(w0, var).to(X.device)
     optimiser = optim.Adam(LGK.parameters(), lr=1e-2)
 
-    verbose_interval = epochs // 10
+    verbose_interval = epochs // 100
     print()
 
     for i in range(epochs):
@@ -56,12 +57,11 @@ def sgd(w0, X, Y, var, batch_size, epochs):
             f.backward()
             optimiser.step()
 
-            # TODO: clip eta!
-
         f_history[i] = running_f
 
         if i % verbose_interval == verbose_interval-1:
-            print(f'\rSGD epoch {i+1}/{epochs}', end='', flush=True)
+            print(f'\rSGD epoch {i+1}/{epochs} | Gap: {running_f:.4f}',
+                  end='', flush=True)
 
     print('\033[1K\033[F\033[22C', end='', flush=True)
 
@@ -86,8 +86,10 @@ class LinearGaussianKernel(nn.Module):
     def __init__(self, w0, var):
         super().__init__()
         self.slgk = SemiLGK(w0, var)
-        self.eta = nn.Parameter(torch.zeros(len(w0)))
-        self.var = var
+        self.log_eta = nn.Parameter(torch.zeros(len(w0)))
 
     def forward(self, X, Y):
-        return torch.matmul(self.eta * self.slgk(X), self.slgk(Y).t())
+        return torch.bmm(
+            torch.exp(self.log_eta) * self.slgk(X).unsqueeze(1),
+            self.slgk(Y).unsqueeze(2)
+        ).squeeze()
