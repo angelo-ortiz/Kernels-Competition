@@ -7,10 +7,6 @@
 import numpy as np
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-from utils import layer_norm, extract_sq_patches, gaussian_window)
 
 class LinearSVC:
     def __init__(self, n_classes, C=1., tol=1e-3, eps=1e-6, max_iter=-1):
@@ -22,7 +18,6 @@ class LinearSVC:
         self.max_iter = np.inf if max_iter < 0 else max_iter
         self._kernel = {}  # lazy computation with double-index indirection
 
-    @property
     def kernel(self, i, j):
         # exploit symmetry
         if i > j:
@@ -30,26 +25,21 @@ class LinearSVC:
 
         try:
             k_i = self._kernel[i]
-        with KeyError:
+        except KeyError:
             k_i = {}
             self._kernel[i] = k_i
         finally:
             try:
                 return k_i[j]
-            with KeyError:
-                k_i[j] = torch.dot(self._X[i], self._X[j])
+            except KeyError:
+                k_i[j] = torch.dot(self._X[i], self._X[j]).item()
                 return k_i[j]
 
     def _initialise_params(self, n_samples, n_features):
-        # TODO: dual_coef_ necessarily on cuda?
-        self.dual_coef_ = torch.zeros(self.n_classes, n_samples, device=self._device)
+        self.dual_coef_ = np.zeros((self.n_classes, n_samples))
         self.coef_ = torch.zeros(self.n_classes, n_features, device=self._device)
         self.intercept_ = torch.zeros(self.n_classes, device=self._device)
         self.n_iter_ = 0
-
-    def _non_bound_indices(self, c):
-        non_bound = self.dual_coef_[c] > 0 & self.dual_coef_[c] < self.C
-        return torch.nonzero(non_bound).squeeze()
 
     def _take_step(self, c, i, j):
         if i == j:
@@ -59,7 +49,7 @@ class LinearSVC:
         alph_i = self.dual_coef_[c, i]
         alph_j = self.dual_coef_[c, j]
         alph_gap = alph_j + s * alph_i
-        L_j = max(0, alph_gap - self.C * (s+1)/2)
+        L_j = max(0., alph_gap - self.C * (s+1)/2)
         H_j = min(self.C, alph_gap - self.C * (s-1)/2)
         if L_j == H_j:
             return False
@@ -71,12 +61,12 @@ class LinearSVC:
         k_jj = self.kernel(j, j)
         eta = k_ii + k_jj - 2 * k_ij
         if eta > 0:
-            a_j += self._y[j]*(self._errors[i] - self._errors[j])/eta
-            a_j = np.clip(a_j, L_j, H_J)
+            a_j += self._y[j]*(self._errors[i] - self._errors[j]).item()/eta
+            a_j = np.clip(a_j, L_j, H_j)
         else:
-            f_i = self._y[i]*(self._errors[i]-self._intercept_[c]) \
+            f_i = self._y[i]*(self._errors[i]-self.intercept_[c]).item() \
                 - alph_i*k_ii - s*alph_j*k_ij
-            f_j = self._y[j]*(self._errors[j]-self._intercept_[c]) \
+            f_j = self._y[j]*(self._errors[j]-self.intercept_[c]).item() \
                 - s*alph_i*k_ij - alph_j*k_jj
             L_i = alph_i + s*(alph_j - L_j)
             H_i = alph_i + s*(alph_j - H_j)
@@ -89,6 +79,12 @@ class LinearSVC:
             elif L_obj > H_obj + self.eps:
                 a_j = H_j
 
+        # Push a2 to 0 or C if very close
+        if a_j < 1e-3:
+            a_j = 0.
+        elif a_j > self.C - 1e-3:
+            a_j = self.C
+
         gap_j = a_j - alph_j
         if abs(gap_j) < self.eps*(a_j + alph_j + self.eps):
             return False
@@ -96,14 +92,25 @@ class LinearSVC:
         a_i = alph_i - s * gap_j
 
         # update the intercept
+        w_i = 0
+        w_j = 0
+
         intercept_i = self._errors[i] + self._y[j] * gap_j * (k_ij - k_ii)
-        intercept_j = self._errors[j] + self._y[j] * gap_j * (k_jj - k_ij)
         if 0 < a_i and a_i < self.C:
-           intercept_diff += intercept_i
-        elif 0 < a_j and a_j < self.C:
-            intercept_diff += intercept_j
+            w_i += .5
         else:
-            intercept_diff += (intercept_i + intercept_j) / 2
+            w_j += .5
+            self._non_bound[i] = False
+
+        intercept_j = self._errors[j] + self._y[j] * gap_j * (k_jj - k_ij)
+        if 0 < a_j and a_j < self.C:
+            w_j += .5
+        else:
+            w_i += .5
+            self._non_bound[j] = False
+
+        intercept_diff = w_i*intercept_i + w_j*intercept_j # TODO: resume here (numbers skyrocketing too fast!!!)
+        print(gap_j, intercept_i.item(), intercept_j.item(), self._errors[i].item(), self._errors[j].item())
         self.intercept_[c] += intercept_diff
 
         # update the weight vector
@@ -120,27 +127,28 @@ class LinearSVC:
 
 
     def _examine_example(self, c, i):
-        r_i = self._y[i] * self._errors[i]
+        r_i = self._y[i] * self._errors[i].item()
 
         if (r_i < -self.tol and self.dual_coef_[c, i] < self.C) \
            or (r_i > self.tol and self.dual_coef_[c, i] > 0):
-            if len(self._non_bound) > 1:
+            num_non_bound = self._non_bound.sum()
+            if num_non_bound > 1:
                 # second-choice heuristic
-                if self._errors[i] >= 0:
-                    j = torch.argmin(self._errors[self._non_bound])
+                if self._errors[i].item() >= 0:
+                    j = torch.argmin(self._errors[self._non_bound]).item()
                 else:
-                    j = torch.argmax(self._errors[self._non_bound])
+                    j = torch.argmax(self._errors[self._non_bound]).item()
                 if self._take_step(c, i, j):
                     return True
 
-                non_bound_perm = torch.randperm(len(self._non_bound), device=self._device)
-                for j in self._non_bound[non_bound_perm]:
-                    if self._take_step(c, i, j):
-                        return True
+            nb_perm = torch.randperm(num_non_bound, device=self._device)
+            for j in torch.nonzero(self._non_bound).squeeze()[nb_perm]:
+                if self._take_step(c, i, j.item()):
+                    return True
 
-                for j in torch.randperm(len(self._y)):  # TODO: skip j = i?
-                    if self._take_step(c, i, j):
-                        return True
+            for j in torch.randperm(len(self._y)):  # TODO: skip j = i?
+                if self._take_step(c, i, j.item()):
+                    return True
 
         return False
 
@@ -148,9 +156,10 @@ class LinearSVC:
         iter_ = 0
         num_changed = 0
         examine_all = True
-        self._y = torch.where(y == c, 1, -1)
-        self._errors = -self._y  # w_0 = 0, b_0 = 0
-        self._non_bound = self._non_bound_indices(c)
+        self._y = np.where(y == c, 1., -1.)
+        # w_0 = 0, b_0 = 0
+        self._errors = torch.from_numpy(-self._y).to(self._device)
+        self._non_bound = torch.zeros(len(y), dtype=bool, device=self._device)
 
         while iter_ < self.max_iter and (num_changed > 0 or examine_all):
             iter_ += 1
@@ -160,9 +169,9 @@ class LinearSVC:
                 examine_all = False
 
                 for i in range(len(y)):
-                    num_changed += self._examine_example(i)
+                    num_changed += self._examine_example(c, i)
             else:
-                for i in self._non_bound:
+                for i in torch.nonzero(self._non_bound).squeeze():
                     num_changed += self._examine_example(c, i)
 
                 if num_changed > 0:
@@ -172,7 +181,7 @@ class LinearSVC:
 
         del self._y
         del self._errors
-        self self._non_bound
+        del self._non_bound
 
         return self
 
@@ -186,7 +195,6 @@ class LinearSVC:
             self._fit_class_vs_rest(c, y)
 
         del self._X
-        del self._y
 
         return self
 
