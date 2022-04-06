@@ -67,9 +67,9 @@ def main(args):
     device = 'cpu' if args.gpu < 0 else f'cuda:{args.gpu}'
 
     ckn = CKN(
-       out_filters=[12, 200],
-       patch_sizes=[2, 2],
-       subsample_factors=[2, 4],
+       out_filters=[100, 800], # [12, 800]
+       patch_sizes=[2, 2], # [1, 2] for GM
+       subsample_factors=[2, 4],  # TODO: [2, 1] for PM??? [2, 2] for GM???
        solver_samples=40000,
        batch_size=100,
        epochs=100

@@ -4,6 +4,7 @@
 .. moduleauthor:: Angelo Ortiz <github.com/angelo-ortiz>
 """
 
+import math
 import numpy as np
 import torch
 
@@ -15,7 +16,7 @@ def _init_centroids(X, n_clusters, x_sq_norms):
         n_clusters, h, w, c, dtype=X.dtype, device=X.device
     )
 
-    n_local_trials = 2 + int(np.log(n_clusters))
+    n_local_trials = 2 + int(math.log(n_clusters))
 
     # Pick first center randomly and track index of point
     centre_id = np.random.randint(n_samples)
@@ -195,6 +196,6 @@ def k_means(X, n_clusters, n_init=10, max_iter=300, tol=1e-4):
     distinct_clusters = len(set(best_labels))
     if distinct_clusters < n_clusters:
         print(f'Warning: Number of distinct clusters ({distinct_clusters})',
-              f'found less than n_clusters ({self.n_clusters})!', sep=' ')
+              f'found less than n_clusters ({n_clusters})!', sep=' ')
 
     return best_centres, best_labels, best_n_iter

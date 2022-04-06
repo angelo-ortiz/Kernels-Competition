@@ -46,7 +46,7 @@ def dynamic_partition(data, partitions, num_partitions=None):
     return [data[partitions == i] for i in range(num_partitions)]
 
 
-def extract_sq_patches(x, size, stride):
+def extract_sq_patches(x, size, stride):  # TODO: need for padding in the patches???
     """x : (batch, h, w, c) """
     patches = x.unfold(1, size, stride).unfold(2, size, stride)
     return patches.contiguous().view(-1, size, size, x.shape[-1])

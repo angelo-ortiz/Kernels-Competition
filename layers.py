@@ -4,6 +4,7 @@
 .. moduleauthor:: Angelo Ortiz <github.com/angelo-ortiz>
 """
 
+import math
 import numpy as np
 
 import torch
@@ -107,11 +108,12 @@ class CKNLayer:
         if c == 2:  # low dimension
             angles = torch.linspace(
                 0., 2 * np.pi, self.out_filters + 1, device=device
-            )[:-1]
+            )[1:] # [:-1]
             w = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
             self.w = w.view(self.out_filters, 1, 1, 2)
             self.eta = torch.ones(self.out_filters, device=device)
-            self.var = np.square(2 * np.pi / self.out_filters)
+            angle_std = 2 * np.pi / self.out_filters
+            self.var = (1 - math.cos(angle_std))**2 + math.sin(angle_std)**2
             patches = input_maps.view(-1, 1, 1, 2)
         else:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
@@ -120,13 +122,15 @@ class CKNLayer:
         patches_norm = patches \
             / torch.clip(norms, min=MIN_NORM).view(-1, 1, 1, 1)
 
+        # TODO: print(patches_norm.shape) and compute the size (28 GiB for
+        # diffs?1?1)
         diffs = patches_norm.unsqueeze(1) - self.w
         diffs_norm = layer_norm(diffs, squared=True)
 
         act_maps = torch.exp(-diffs_norm / self.var) * torch.sqrt(self.eta)
         act_maps *= norms.unsqueeze(1) # batch * h * w, p_k
 
-        patch_dim = np.sqrt(act_maps.shape[0] / n)
+        patch_dim = math.sqrt(act_maps.shape[0] / n)
         assert patch_dim == int(patch_dim), 'Only square patches supported'
         patch_dim = int(patch_dim)
 

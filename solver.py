@@ -4,7 +4,7 @@
 .. moduleauthor:: Angelo Ortiz <github.com/angelo-ortiz>
 """
 
-import numpy as np
+import math
 
 import torch
 import torch.nn as nn
@@ -15,7 +15,7 @@ from utils import layer_norm
 
 def _dataloader(X, Y, K, batch_size):
     n = len(X)
-    n_batches = int(np.ceil(n / batch_size))
+    n_batches = int(math.ceil(n / batch_size))
     for i in range(n_batches):
         b = i * batch_size
         e = min(b + batch_size, n)
