@@ -14,6 +14,11 @@ def layer_norm(X, squared=False):
     return norms
 
 
+def layer_normalise(X, eps=1e-3):
+    norms = layer_norm(X)
+    return X / torch.clip(norms, min=eps).view(-1, 1, 1, 1), norms
+
+
 def euclidean_distances(X, Y, X_norm_squared=None, Y_norm_squared=None,
                         squared=False):
     if X_norm_squared is None:
@@ -52,10 +57,10 @@ def extract_sq_patches(x, size, stride):  # TODO: need for padding in the patche
     return patches.contiguous().view(-1, size, size, x.shape[-1])
 
 
-def gaussian_window(n, var, device):
+def gaussian_window(n, var, dtype, device):
     if n <= 1:
-        return torch.ones(1, 1, device=device)
-    w = torch.arange(n, device=device) - (n - 1.) / 2.
+        return torch.ones(1, 1, dtype=dtype, device=device)
+    w = torch.arange(n, dtype=dtype, device=device) - (n - 1.) / 2.
     ww = torch.stack(torch.meshgrid(w, w, indexing='ij'), dim=-1)
     ww = torch.einsum('ijk,ijk->ij', ww, ww)  # square of the norm
     return torch.exp(-ww / var)

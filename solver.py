@@ -22,7 +22,7 @@ def _dataloader(X, Y, K, batch_size):
         yield X[b:e], Y[b:e], K[b:e]
 
 
-def sgd(w0, X, Y, var, batch_size, epochs):
+def sgd(w0, X, Y, lr, var, batch_size, epochs):
     diffs_norm = layer_norm(X - Y, squared=True)
 
     if var is None:
@@ -40,9 +40,9 @@ def sgd(w0, X, Y, var, batch_size, epochs):
     f_history = torch.zeros(epochs)
 
     LGK = LinearGaussianKernel(w0, var).to(X.device)
-    optimiser = optim.Adam(LGK.parameters(), lr=1e-2)
+    optimiser = optim.Adam(LGK.parameters(), lr=lr)
 
-    verbose_interval = epochs // 100
+    verbose_interval = epochs // 10
     print()
 
     for i in range(epochs):

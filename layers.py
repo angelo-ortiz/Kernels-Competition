@@ -11,14 +11,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils import layer_norm, extract_sq_patches, gaussian_window
+from utils import layer_norm, layer_normalise, extract_sq_patches, gaussian_window
 from kmeans import k_means
 from solver import sgd# , l_bfgs_b
 
-MIN_NORM = 1e-3
-
 class CKN:
-    def __init__(self, out_filters, patch_sizes, subsample_factors,
+    def __init__(self, out_filters, patch_sizes, subsample_factors, lrs,
                  solver_samples, var=None, batch_size=50, epochs=4000):
         super().__init__()
         self.layers = []
@@ -27,6 +25,7 @@ class CKN:
                 out_filters[i],
                 patch_sizes[i],
                 subsample_factors[i],
+                lrs[i],
                 solver_samples,
                 var,
                 batch_size,
@@ -53,12 +52,13 @@ class CKN:
 
 
 class CKNLayer:
-    def __init__(self, out_filters, patch_size, subsample_factor,
+    def __init__(self, out_filters, patch_size, subsample_factor, lr,
                  solver_samples=300000, var=None, batch_size=50, epochs=4000):
         super().__init__()
         self.out_filters = out_filters  # p_k
         self.patch_size = patch_size  # sqrt(|P'_k|)
         self.subsample_factor = subsample_factor
+        self.lr = lr
         self.solver_samples = solver_samples
         self.var = var
         self.batch_size = batch_size
@@ -80,6 +80,8 @@ class CKNLayer:
                 solver_samples = min(len(patches), self.solver_samples)
                 sampled_indices = torch.randint(len(indices), (2, solver_samples))
                 X, Y = patches[indices[sampled_indices]]
+                X, _ = layer_normalise(X)
+                Y, _ = layer_normalise(Y)
 
                 print('Starting k-means initialisation...', end='', flush=True)
                 w0, _, _ = k_means(torch.cat((X, Y), dim=0), self.out_filters)
@@ -90,6 +92,7 @@ class CKNLayer:
                 w0,
                 X,
                 Y,
+                self.lr,
                 self.var,
                 self.batch_size,
                 self.epochs
@@ -107,25 +110,31 @@ class CKNLayer:
 
         if c == 2:  # low dimension
             angles = torch.linspace(
-                0., 2 * np.pi, self.out_filters + 1, device=device
+                0., 2 * math.pi, self.out_filters + 1, device=device
             )[1:] # [:-1]
             w = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
             self.w = w.view(self.out_filters, 1, 1, 2)
             self.eta = torch.ones(self.out_filters, device=device)
-            angle_std = 2 * np.pi / self.out_filters
+            angle_std = 2 * math.pi / self.out_filters
             self.var = (1 - math.cos(angle_std))**2 + math.sin(angle_std)**2
             patches = input_maps.view(-1, 1, 1, 2)
         else:  # high dimension
             patches = extract_sq_patches(input_maps, self.patch_size, 1)
 
-        norms = layer_norm(patches)
-        patches_norm = patches \
-            / torch.clip(norms, min=MIN_NORM).view(-1, 1, 1, 1)
+        patches_norm, norms = layer_normalise(patches)
 
-        # TODO: print(patches_norm.shape) and compute the size (28 GiB for
-        # diffs?1?1)
-        diffs = patches_norm.unsqueeze(1) - self.w
-        diffs_norm = layer_norm(diffs, squared=True)
+        BATCH_SIZE = 1000
+        num_batches = math.ceil(patches_norm.shape[0] / BATCH_SIZE)
+        diffs_norm = torch.zeros(patches_norm.shape[0], self.w.shape[0],
+                                 device=patches_norm.device)
+        for i in range(num_batches):
+            i_min = i*BATCH_SIZE
+            i_max = min(patches_norm.shape[0], (i+1)*BATCH_SIZE)
+            diffs_norm[i_min:i_max] = layer_norm(
+                patches_norm[i_min:i_max].unsqueeze(1) - self.w
+            )
+        # diffs = patches_norm.unsqueeze(1) - self.w
+        # diffs_norm = layer_norm(diffs, squared=True)
 
         act_maps = torch.exp(-diffs_norm / self.var) * torch.sqrt(self.eta)
         act_maps *= norms.unsqueeze(1) # batch * h * w, p_k
@@ -141,6 +150,7 @@ class CKNLayer:
         gauss_window = gaussian_window( # h', w'
             n=self.subsample_factor,
             var=self.subsample_factor**2,
+            dtype=act_maps.dtype,
             device=device
         )
 
