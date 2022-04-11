@@ -5,6 +5,7 @@
 """
 
 import torch
+import torch.nn.functional as F
 
 def layer_norm(X, squared=False):
     norms = torch.einsum('...hwc,...hwc->...', X, X)
@@ -14,7 +15,7 @@ def layer_norm(X, squared=False):
     return norms
 
 
-def layer_normalise(X, eps=1e-3):
+def layer_normalise(X, eps=1e-5):
     norms = layer_norm(X)
     return X / torch.clip(norms, min=eps).view(-1, 1, 1, 1), norms
 
@@ -51,8 +52,12 @@ def dynamic_partition(data, partitions, num_partitions=None):
     return [data[partitions == i] for i in range(num_partitions)]
 
 
-def extract_sq_patches(x, size, stride):  # TODO: need for padding in the patches???
+def extract_sq_patches(x, size, stride, same=True):
     """x : (batch, h, w, c) """
+    if same:
+        pad = size - 1
+        x = F.pad(x, (0, 0, pad, pad, pad, pad))
+
     patches = x.unfold(1, size, stride).unfold(2, size, stride)
     return patches.contiguous().view(-1, size, size, x.shape[-1])
 

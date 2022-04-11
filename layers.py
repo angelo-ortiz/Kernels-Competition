@@ -1,4 +1,4 @@
-"""
+r"""
 .. module:: layers
    :synopsis: This file contains ...
 .. moduleauthor:: Angelo Ortiz <github.com/angelo-ortiz>
@@ -148,7 +148,7 @@ class CKNLayer:
         act_maps = act_maps.view(-1, 1, patch_dim, patch_dim)
 
         gauss_window = gaussian_window( # h', w'
-            n=self.subsample_factor,
+            n=2*self.subsample_factor,
             var=self.subsample_factor**2,
             dtype=act_maps.dtype,
             device=device
@@ -157,7 +157,8 @@ class CKNLayer:
         output_maps = F.conv2d(
             act_maps,  # batch * p_k, 1, h, w
             gauss_window.view(1, 1, *gauss_window.shape),  # 1, 1, h', w'
-            stride=self.subsample_factor
+            stride=self.subsample_factor,
+            padding=self.subsample_factor//2
         )
         output_maps = output_maps.view(
             n,

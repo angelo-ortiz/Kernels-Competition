@@ -100,13 +100,13 @@ def main(train_maps_fn, test_maps_fn, y_train_fn):
 
     start = timeit.default_timer()
     model = CKN(
-        out_filters=[100, 600],
+        out_filters=[50, 200],
         patch_sizes=[2, 2],
         subsample_factors=[2, 4],
         lrs=[1e-3, 1e-4],
         solver_samples=100000,
         batch_size=100,
-        epochs=100
+        epochs=200
     )
     model.train(X_train)
     train_time = timeit.default_timer() - start
